@@ -19,7 +19,9 @@ from typing import Any
 
 DEFAULT_MLX_BASE_URL = "http://127.0.0.1:8080"
 DEFAULT_MODEL = "models/Qwen2.5-Coder-7B-Instruct-4bit"
-WEB_SEARCH_URL = "https://html.duckduckgo.com/html/"
+BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
+DUCKDUCKGO_SEARCH_URL = "https://html.duckduckgo.com/html/"
+TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 USER_AGENT = "ClaudeLocalCLI/0.1 (+https://github.com/Anashikforu/claude-local-cli)"
 
 
@@ -261,11 +263,113 @@ def http_get_text(url: str, timeout: float, max_bytes: int = 2_000_000) -> str:
     return parser.text()
 
 
+def http_json(
+    url: str,
+    timeout: float,
+    *,
+    data: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    request_headers = {"accept": "application/json", "user-agent": USER_AGENT}
+    if headers:
+        request_headers.update(headers)
+
+    payload = None
+    method = "GET"
+    if data is not None:
+        payload = json.dumps(data).encode("utf-8")
+        request_headers["content-type"] = "application/json"
+        method = "POST"
+
+    request = urllib.request.Request(
+        url,
+        data=payload,
+        headers=request_headers,
+        method=method,
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
 def web_search(query: str, max_results: int, timeout: float) -> dict[str, Any]:
     max_results = max(1, min(max_results, 10))
+    provider = os.getenv("WEB_SEARCH_PROVIDER", "auto").lower()
+
+    if provider in ("auto", "tavily") and os.getenv("TAVILY_API_KEY"):
+        return tavily_search(query, max_results, timeout)
+    if provider in ("auto", "brave") and os.getenv("BRAVE_SEARCH_API_KEY"):
+        return brave_search(query, max_results, timeout)
+    if provider not in ("auto", "duckduckgo", "ddg"):
+        raise ValueError(
+            "WEB_SEARCH_PROVIDER must be auto, tavily, brave, or duckduckgo"
+        )
+    return duckduckgo_search(query, max_results, timeout)
+
+
+def tavily_search(query: str, max_results: int, timeout: float) -> dict[str, Any]:
+    api_key = os.getenv("TAVILY_API_KEY", "")
+    payload = {
+        "query": query,
+        "max_results": max_results,
+        "search_depth": os.getenv("TAVILY_SEARCH_DEPTH", "basic"),
+        "include_answer": True,
+        "include_raw_content": False,
+    }
+    response = http_json(
+        TAVILY_SEARCH_URL,
+        timeout,
+        data=payload,
+        headers={"authorization": f"Bearer {api_key}"},
+    )
+    results = []
+    for item in response.get("results", []):
+        results.append(
+            {
+                "title": item.get("title", ""),
+                "url": item.get("url", ""),
+                "snippet": item.get("content", ""),
+                "score": item.get("score"),
+            }
+        )
+    return {
+        "provider": "tavily",
+        "query": query,
+        "answer": response.get("answer", ""),
+        "results": results,
+    }
+
+
+def brave_search(query: str, max_results: int, timeout: float) -> dict[str, Any]:
+    api_key = os.getenv("BRAVE_SEARCH_API_KEY", "")
+    params = urllib.parse.urlencode({"q": query, "count": max_results})
+    response = http_json(
+        f"{BRAVE_SEARCH_URL}?{params}",
+        timeout,
+        headers={
+            "accept": "application/json",
+            "x-subscription-token": api_key,
+        },
+    )
+    results = []
+    for item in response.get("web", {}).get("results", []):
+        snippets = item.get("extra_snippets") or []
+        description = item.get("description", "")
+        if snippets:
+            description = f"{description}\n" + "\n".join(snippets)
+        results.append(
+            {
+                "title": item.get("title", ""),
+                "url": item.get("url", ""),
+                "snippet": clean_html_fragment(description),
+            }
+        )
+    return {"provider": "brave", "query": query, "results": results}
+
+
+def duckduckgo_search(query: str, max_results: int, timeout: float) -> dict[str, Any]:
     params = urllib.parse.urlencode({"q": query})
     request = urllib.request.Request(
-        f"{WEB_SEARCH_URL}?{params}",
+        f"{DUCKDUCKGO_SEARCH_URL}?{params}",
         headers={"user-agent": USER_AGENT},
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -302,7 +406,7 @@ def web_search(query: str, max_results: int, timeout: float) -> dict[str, Any]:
         if len(results) >= max_results:
             break
 
-    return {"query": query, "results": results}
+    return {"provider": "duckduckgo", "query": query, "results": results}
 
 
 def clean_html_fragment(value: str) -> str:

@@ -26,6 +26,24 @@ The model still runs locally, but these tools use your normal internet connectio
 ENABLE_WEB_TOOLS=0 ./start-local-claude.sh
 ```
 
+For better search quality, configure a real search API. Claude Local CLI uses providers in this order:
+
+1. Tavily when `TAVILY_API_KEY` is set.
+2. Brave Search when `BRAVE_SEARCH_API_KEY` is set.
+3. DuckDuckGo HTML as a no-key fallback.
+
+Examples:
+
+```bash
+TAVILY_API_KEY=tvly-your-key ./start-local-claude.sh
+```
+
+```bash
+BRAVE_SEARCH_API_KEY=your-key ./start-local-claude.sh
+```
+
+Force a provider with `WEB_SEARCH_PROVIDER=auto`, `tavily`, `brave`, or `duckduckgo`.
+
 ## One-command Start
 
 Run everything together:
