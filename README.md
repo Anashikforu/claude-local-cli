@@ -48,18 +48,25 @@ Force a provider with `WEB_SEARCH_PROVIDER=auto`, `tavily`, `brave`, or `duckduc
 
 Claude Local CLI injects an accuracy policy by default. The model is instructed not to invent facts, citations, commands, URLs, names, affiliations, or dates. When evidence is missing or weak, it should say it does not know instead of guessing.
 
-Automatic web verification is enabled by default. For questions that look current, source-specific, personal, or high-risk, the gateway searches before the local model answers and injects the evidence into the prompt.
+Automatic web verification uses `smart` mode by default. For normal coding tasks, the gateway keeps the model focused on local files/context. For questions that look current, source-specific, personal, high-risk, docs-related, or explicitly ask to search/verify, the gateway searches before the local model answers and injects the evidence into the prompt.
 
 Tune it with:
 
 ```bash
-AUTO_WEB_VERIFY=1 \
+AUTO_WEB_VERIFY=smart \
 AUTO_WEB_MODE=balanced \
 AUTO_WEB_MAX_RESULTS=5 \
 AUTO_WEB_TOOL_BUDGET=2 \
 AUTO_WEB_TIMEOUT=8 \
 ./start-local-claude.sh
 ```
+
+`AUTO_WEB_VERIFY` accepts:
+
+- `smart`: default; search only when the turn appears to need external/current evidence.
+- `ask`: search only when the user explicitly asks to search/verify/use docs/latest.
+- `always`: search every turn unless the user says not to.
+- `off`: disable automatic verification.
 
 Automatic verification modes:
 

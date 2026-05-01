@@ -153,7 +153,18 @@ def web_tools_enabled() -> bool:
 
 
 def auto_web_verify_enabled() -> bool:
-    return os.getenv("AUTO_WEB_VERIFY", "1").lower() not in ("0", "false", "no")
+    return os.getenv("AUTO_WEB_VERIFY", "smart").lower() not in ("0", "false", "no", "off")
+
+
+def auto_web_policy() -> str:
+    policy = os.getenv("AUTO_WEB_VERIFY", "smart").lower()
+    if policy in ("1", "true", "yes", "on"):
+        return "always"
+    if policy in ("0", "false", "no", "off"):
+        return "off"
+    if policy not in ("smart", "ask"):
+        return "smart"
+    return policy
 
 
 def auto_web_timeout() -> float:
@@ -307,6 +318,12 @@ def request_needs_web_verification(text: str) -> bool:
     if user_disables_web(text):
         return False
     if user_forces_web(text):
+        return True
+    if auto_web_policy() == "off":
+        return False
+    if auto_web_policy() == "ask":
+        return False
+    if auto_web_policy() == "always":
         return True
 
     lowered = text.lower()
@@ -745,11 +762,15 @@ def openai_to_anthropic_response(openai_response: dict[str, Any], model: str, re
 def anthropic_to_openai_request(request: dict[str, Any], default_model: str) -> dict[str, Any]:
     requested_model = request.get("model") or default_model
     model = resolve_model(requested_model, default_model)
+    messages = convert_messages(request.get("messages", []))
+    user_text = latest_user_text(messages)
+    use_web_this_turn = request_needs_web_verification(user_text)
     openai_request: dict[str, Any] = {
         "model": model,
-        "messages": convert_messages(request.get("messages", [])),
+        "messages": messages,
         "stream": bool(request.get("stream", False)),
         "_anthropic_model": requested_model,
+        "_web_enabled_this_turn": use_web_this_turn,
     }
 
     system = request.get("system")
@@ -763,7 +784,7 @@ def anthropic_to_openai_request(request: dict[str, Any], default_model: str) -> 
             {"role": "system", "content": accuracy_policy_prompt()},
         )
 
-    if web_tools_enabled():
+    if use_web_this_turn:
         openai_request["messages"].insert(
             0,
             {
@@ -804,7 +825,8 @@ def anthropic_to_openai_request(request: dict[str, Any], default_model: str) -> 
                     "function": {"name": tool_choice.get("name", "")},
                 }
 
-    add_local_web_tools(openai_request)
+    if use_web_this_turn:
+        add_local_web_tools(openai_request)
     return openai_request
 
 
@@ -974,6 +996,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
             )
 
     def add_auto_web_evidence(self, openai_request: dict[str, Any]) -> None:
+        if not openai_request.get("_web_enabled_this_turn"):
+            return
         evidence = build_web_evidence_for_request(
             latest_user_text(openai_request.get("messages", [])),
             min(auto_web_timeout(), self.server.timeout),  # type: ignore[attr-defined]
@@ -1016,6 +1040,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     def complete_with_local_tools(self, openai_request: dict[str, Any]) -> dict[str, Any]:
         request_for_loop = dict(openai_request)
+        request_for_loop["messages"] = list(openai_request.get("messages", []))
         request_for_loop["stream"] = False
 
         tool_budget = auto_web_tool_budget()
@@ -1112,7 +1137,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         return payload
 
     def proxy_stream(self, request: dict[str, Any], openai_request: dict[str, Any]) -> None:
-        if web_tools_enabled():
+        if openai_request.get("_web_enabled_this_turn"):
             try:
                 payload = self.complete_with_local_tools(openai_request)
             except urllib.error.HTTPError as exc:
