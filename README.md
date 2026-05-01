@@ -54,13 +54,19 @@ Tune it with:
 
 ```bash
 AUTO_WEB_VERIFY=1 \
+AUTO_WEB_MODE=balanced \
 AUTO_WEB_MAX_RESULTS=5 \
-AUTO_WEB_FETCH_RESULTS=0 \
 AUTO_WEB_TIMEOUT=8 \
 ./start-local-claude.sh
 ```
 
-By default, automatic verification performs search only. Set `AUTO_WEB_FETCH_RESULTS=1` or higher when you want it to fetch full pages too; this is more accurate but slower.
+Automatic verification modes:
+
+- `AUTO_WEB_MODE=fast`: search snippets only.
+- `AUTO_WEB_MODE=balanced`: search plus one prioritized page fetch. This is the default.
+- `AUTO_WEB_MODE=deep`: search plus up to three prioritized page fetches.
+
+Override fetch behavior directly with `AUTO_WEB_FETCH_RESULTS` and fetched text size with `AUTO_WEB_MAX_CHARS`.
 
 Disable automatic web verification with:
 

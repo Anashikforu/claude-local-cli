@@ -160,6 +160,25 @@ def auto_web_timeout() -> float:
     return float(os.getenv("AUTO_WEB_TIMEOUT", "8"))
 
 
+def auto_web_mode() -> str:
+    mode = os.getenv("AUTO_WEB_MODE", "balanced").lower()
+    if mode not in ("fast", "balanced", "deep"):
+        return "balanced"
+    return mode
+
+
+def auto_web_fetch_count() -> int:
+    if "AUTO_WEB_FETCH_RESULTS" in os.environ:
+        return max(0, int(os.getenv("AUTO_WEB_FETCH_RESULTS", "0")))
+    return {"fast": 0, "balanced": 1, "deep": 3}[auto_web_mode()]
+
+
+def auto_web_max_chars() -> int:
+    if "AUTO_WEB_MAX_CHARS" in os.environ:
+        return max(500, int(os.getenv("AUTO_WEB_MAX_CHARS", "3000")))
+    return {"fast": 0, "balanced": 3000, "deep": 8000}[auto_web_mode()]
+
+
 def accuracy_policy_enabled() -> bool:
     return os.getenv("ENABLE_ACCURACY_POLICY", "1").lower() not in ("0", "false", "no")
 
@@ -286,7 +305,14 @@ def search_query_for_request(text: str) -> str:
     if url_match:
         return url_match.group(0).rstrip(").,]")
     text = " ".join(text.split())
-    text = re.sub(r"^(do you know|who is|what is|tell me about)\s+", "", text, flags=re.I)
+    text = re.sub(
+        r"^(can you\s+)?(please\s+)?(do you know|who is|what is|what are|tell me about|look up|search for|verify)\s+",
+        "",
+        text,
+        flags=re.I,
+    )
+    text = re.sub(r"\b(can you|please|for me|on the web|online)\b", " ", text, flags=re.I)
+    text = " ".join(text.split())
     return text.strip(" ?")[:200]
 
 
@@ -296,12 +322,18 @@ def result_has_url(result: dict[str, Any]) -> bool:
 
 def fetch_priority(result: dict[str, Any]) -> int:
     url = str(result.get("url", "")).lower()
-    if "linkedin.com" in url or "facebook.com" in url or "instagram.com" in url:
-        return 3
+    title = str(result.get("title", "")).lower()
+    snippet = str(result.get("snippet", "")).lower()
+    if any(domain in url for domain in ("linkedin.com", "facebook.com", "instagram.com", "x.com", "twitter.com")):
+        return 5
     if ".edu" in url or ".ac." in url or "iitkgp.ac.in" in url:
         return 0
-    if "github.com" in url or "researchgate.net" in url or "scholar.google" in url:
+    if any(domain in url for domain in ("github.com", "researchgate.net", "scholar.google")):
         return 1
+    if any(word in title or word in snippet for word in ("official", "documentation", "docs", "homepage", "profile")):
+        return 2
+    if any(domain in url for domain in ("medium.com", "reddit.com", "quora.com")):
+        return 4
     return 2
 
 
@@ -313,16 +345,21 @@ def build_web_evidence_for_request(text: str, timeout: float) -> str | None:
     if not query:
         return None
 
-    evidence: dict[str, Any] = {"query": query, "search": None, "fetched_pages": []}
+    evidence: dict[str, Any] = {
+        "query": query,
+        "mode": auto_web_mode(),
+        "search": None,
+        "fetched_pages": [],
+    }
     try:
         if query.startswith(("http://", "https://")):
             evidence["fetched_pages"].append(
-                {"url": query, "text": http_get_text(query, timeout)[:6000]}
+                {"url": query, "text": http_get_text(query, timeout)[: max(auto_web_max_chars(), 6000)]}
             )
         else:
             search_result = web_search(query, int(os.getenv("AUTO_WEB_MAX_RESULTS", "5")), timeout)
             evidence["search"] = search_result
-            fetch_count = int(os.getenv("AUTO_WEB_FETCH_RESULTS", "0"))
+            fetch_count = auto_web_fetch_count()
             if fetch_count <= 0:
                 return (
                     "Automatic web verification evidence for the user's latest request:\n"
@@ -339,11 +376,12 @@ def build_web_evidence_for_request(text: str, timeout: float) -> str | None:
                 if not result_has_url(result):
                     continue
                 try:
+                    max_chars = auto_web_max_chars()
                     evidence["fetched_pages"].append(
                         {
                             "url": result["url"],
                             "title": result.get("title", ""),
-                            "text": http_get_text(result["url"], timeout)[:4000],
+                            "text": http_get_text(result["url"], timeout)[:max_chars],
                         }
                     )
                 except Exception as exc:  # noqa: BLE001 - keep other evidence
