@@ -152,6 +152,24 @@ def web_tools_enabled() -> bool:
     return os.getenv("ENABLE_WEB_TOOLS", "1").lower() not in ("0", "false", "no")
 
 
+def accuracy_policy_enabled() -> bool:
+    return os.getenv("ENABLE_ACCURACY_POLICY", "1").lower() not in ("0", "false", "no")
+
+
+def accuracy_policy_prompt() -> str:
+    return (
+        "Accuracy policy: Be conservative and evidence-based. Do not invent facts, "
+        "names, affiliations, dates, URLs, APIs, commands, or citations. If the "
+        "answer is not available from the conversation, provided files, or tool "
+        "results, say that you do not know. For current, niche, personal, legal, "
+        "medical, financial, or source-specific claims, use available web tools "
+        "before answering. If search or fetch results are missing, weak, ambiguous, "
+        "or contradictory, explain that the evidence is insufficient instead of "
+        "guessing. Do not provide suggestions as facts unless they are supported "
+        "by evidence; label uncertain reasoning clearly as uncertainty."
+    )
+
+
 def local_web_tools() -> list[dict[str, Any]]:
     return [
         {
@@ -547,6 +565,12 @@ def anthropic_to_openai_request(request: dict[str, Any], default_model: str) -> 
     if system:
         system_text = anthropic_content_to_text(system)
         openai_request["messages"].insert(0, {"role": "system", "content": system_text})
+
+    if accuracy_policy_enabled():
+        openai_request["messages"].insert(
+            0,
+            {"role": "system", "content": accuracy_policy_prompt()},
+        )
 
     if web_tools_enabled():
         openai_request["messages"].insert(

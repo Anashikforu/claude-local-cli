@@ -44,6 +44,16 @@ BRAVE_SEARCH_API_KEY=your-key ./start-local-claude.sh
 
 Force a provider with `WEB_SEARCH_PROVIDER=auto`, `tavily`, `brave`, or `duckduckgo`.
 
+## Accuracy Policy
+
+Claude Local CLI injects an accuracy policy by default. The model is instructed not to invent facts, citations, commands, URLs, names, affiliations, or dates. When evidence is missing or weak, it should say it does not know instead of guessing.
+
+Disable this policy with:
+
+```bash
+ENABLE_ACCURACY_POLICY=0 ./start-local-claude.sh
+```
+
 ## One-command Start
 
 Run everything together:
