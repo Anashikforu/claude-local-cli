@@ -156,6 +156,10 @@ def auto_web_verify_enabled() -> bool:
     return os.getenv("AUTO_WEB_VERIFY", "1").lower() not in ("0", "false", "no")
 
 
+def auto_web_timeout() -> float:
+    return float(os.getenv("AUTO_WEB_TIMEOUT", "8"))
+
+
 def accuracy_policy_enabled() -> bool:
     return os.getenv("ENABLE_ACCURACY_POLICY", "1").lower() not in ("0", "false", "no")
 
@@ -318,10 +322,19 @@ def build_web_evidence_for_request(text: str, timeout: float) -> str | None:
         else:
             search_result = web_search(query, int(os.getenv("AUTO_WEB_MAX_RESULTS", "5")), timeout)
             evidence["search"] = search_result
+            fetch_count = int(os.getenv("AUTO_WEB_FETCH_RESULTS", "0"))
+            if fetch_count <= 0:
+                return (
+                    "Automatic web verification evidence for the user's latest request:\n"
+                    f"{json.dumps(evidence, ensure_ascii=False, indent=2)}\n\n"
+                    "Use this evidence to answer. Cite source URLs when making factual claims. "
+                    "If the evidence is empty, weak, ambiguous, or does not support an answer, "
+                    "say you do not have enough reliable evidence instead of guessing."
+                )
             results_to_fetch = sorted(
                 search_result.get("results", []),
                 key=fetch_priority,
-            )[: int(os.getenv("AUTO_WEB_FETCH_RESULTS", "2"))]
+            )[:fetch_count]
             for result in results_to_fetch:
                 if not result_has_url(result):
                     continue
@@ -893,7 +906,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def add_auto_web_evidence(self, openai_request: dict[str, Any]) -> None:
         evidence = build_web_evidence_for_request(
             latest_user_text(openai_request.get("messages", [])),
-            self.server.timeout,  # type: ignore[attr-defined]
+            min(auto_web_timeout(), self.server.timeout),  # type: ignore[attr-defined]
         )
         if evidence:
             openai_request["messages"].insert(
