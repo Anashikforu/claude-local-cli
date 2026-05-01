@@ -13,6 +13,19 @@ Claude Code expects an Anthropic-compatible API:
 
 This gateway translates between the two.
 
+## Web Tools
+
+Claude Local CLI adds two gateway-side tools for the local model:
+
+- `web_search(query, max_results)` searches the web for current results.
+- `web_fetch(url, max_chars)` fetches a URL and returns readable page text.
+
+The model still runs locally, but these tools use your normal internet connection when the model requests live information. Disable them with:
+
+```bash
+ENABLE_WEB_TOOLS=0 ./start-local-claude.sh
+```
+
 ## One-command Start
 
 Run everything together:

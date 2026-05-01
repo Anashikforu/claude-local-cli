@@ -4,18 +4,23 @@
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from html.parser import HTMLParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 
 DEFAULT_MLX_BASE_URL = "http://127.0.0.1:8080"
 DEFAULT_MODEL = "models/Qwen2.5-Coder-7B-Instruct-4bit"
+WEB_SEARCH_URL = "https://html.duckduckgo.com/html/"
+USER_AGENT = "ClaudeLocalCLI/0.1 (+https://github.com/Anashikforu/claude-local-cli)"
 
 
 def now_id(prefix: str) -> str:
@@ -141,6 +146,197 @@ def convert_tools(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]] | 
     return converted
 
 
+def web_tools_enabled() -> bool:
+    return os.getenv("ENABLE_WEB_TOOLS", "1").lower() not in ("0", "false", "no")
+
+
+def local_web_tools() -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": "Search the web for current information. Returns a small list of result titles, URLs, and snippets.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The search query.",
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Maximum number of results to return.",
+                            "minimum": 1,
+                            "maximum": 10,
+                            "default": 5,
+                        },
+                    },
+                    "required": ["query"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "web_fetch",
+                "description": "Fetch a web page URL and return readable text from the page.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "The http or https URL to fetch.",
+                        },
+                        "max_chars": {
+                            "type": "integer",
+                            "description": "Maximum number of extracted text characters to return.",
+                            "minimum": 500,
+                            "maximum": 20000,
+                            "default": 6000,
+                        },
+                    },
+                    "required": ["url"],
+                },
+            },
+        },
+    ]
+
+
+def add_local_web_tools(openai_request: dict[str, Any]) -> None:
+    if not web_tools_enabled():
+        return
+
+    tools = openai_request.setdefault("tools", [])
+    existing_names = {
+        tool.get("function", {}).get("name")
+        for tool in tools
+        if isinstance(tool, dict)
+    }
+    for tool in local_web_tools():
+        name = tool["function"]["name"]
+        if name not in existing_names:
+            tools.append(tool)
+
+    if "tool_choice" not in openai_request:
+        openai_request["tool_choice"] = "auto"
+
+
+class TextExtractor(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.parts: list[str] = []
+        self.skip_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in ("script", "style", "noscript", "svg"):
+            self.skip_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in ("script", "style", "noscript", "svg") and self.skip_depth:
+            self.skip_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if self.skip_depth:
+            return
+        text = " ".join(data.split())
+        if text:
+            self.parts.append(text)
+
+    def text(self) -> str:
+        return "\n".join(self.parts)
+
+
+def http_get_text(url: str, timeout: float, max_bytes: int = 2_000_000) -> str:
+    request = urllib.request.Request(url, headers={"user-agent": USER_AGENT})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        content_type = response.headers.get("content-type", "")
+        charset = response.headers.get_content_charset() or "utf-8"
+        raw = response.read(max_bytes)
+    text = raw.decode(charset, errors="replace")
+    if "text/html" not in content_type:
+        return text
+    parser = TextExtractor()
+    parser.feed(text)
+    return parser.text()
+
+
+def web_search(query: str, max_results: int, timeout: float) -> dict[str, Any]:
+    max_results = max(1, min(max_results, 10))
+    params = urllib.parse.urlencode({"q": query})
+    request = urllib.request.Request(
+        f"{WEB_SEARCH_URL}?{params}",
+        headers={"user-agent": USER_AGENT},
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        html_text = response.read(1_000_000).decode("utf-8", errors="replace")
+
+    results: list[dict[str, str]] = []
+    pattern = re.compile(
+        r'<a[^>]+class="result__a"[^>]+href="(?P<href>[^"]+)"[^>]*>(?P<title>.*?)</a>',
+        re.DOTALL,
+    )
+    snippets = re.findall(
+        r'<a[^>]+class="result__snippet"[^>]*>(.*?)</a>|<div[^>]+class="result__snippet"[^>]*>(.*?)</div>',
+        html_text,
+        re.DOTALL,
+    )
+    clean_snippets = [
+        clean_html_fragment(first or second)
+        for first, second in snippets
+    ]
+
+    for index, match in enumerate(pattern.finditer(html_text)):
+        href = html.unescape(match.group("href"))
+        title = clean_html_fragment(match.group("title"))
+        parsed = urllib.parse.urlparse(href)
+        query_params = urllib.parse.parse_qs(parsed.query)
+        url = query_params.get("uddg", [href])[0]
+        results.append(
+            {
+                "title": title,
+                "url": url,
+                "snippet": clean_snippets[index] if index < len(clean_snippets) else "",
+            }
+        )
+        if len(results) >= max_results:
+            break
+
+    return {"query": query, "results": results}
+
+
+def clean_html_fragment(value: str) -> str:
+    value = re.sub(r"<[^>]+>", " ", value)
+    return " ".join(html.unescape(value).split())
+
+
+def execute_local_tool(name: str, arguments: Any, timeout: float) -> str:
+    if not isinstance(arguments, dict):
+        arguments = {}
+    try:
+        if name == "web_search":
+            query = str(arguments.get("query", "")).strip()
+            if not query:
+                raise ValueError("web_search requires a query")
+            result = web_search(
+                query,
+                int(arguments.get("max_results", 5)),
+                timeout,
+            )
+        elif name == "web_fetch":
+            url = str(arguments.get("url", "")).strip()
+            if not url.startswith(("http://", "https://")):
+                raise ValueError("web_fetch requires an http or https URL")
+            max_chars = max(500, min(int(arguments.get("max_chars", 6000)), 20000))
+            text = http_get_text(url, timeout)[:max_chars]
+            result = {"url": url, "text": text}
+        else:
+            raise ValueError(f"Unknown local tool: {name}")
+    except Exception as exc:  # noqa: BLE001 - tool errors should return to the model
+        result = {"error": exc.__class__.__name__, "message": str(exc)}
+    return json.dumps(result, ensure_ascii=False)
+
+
 def parse_tool_arguments(arguments: Any) -> Any:
     if isinstance(arguments, dict):
         return arguments
@@ -152,10 +348,12 @@ def parse_tool_arguments(arguments: Any) -> Any:
         return {"_raw_arguments": arguments}
 
 
-def clean_model_text(text: str) -> str:
+def clean_model_text(text: str, *, strip: bool = True) -> str:
     for token in ("<|im_end|>", "<|im_start|>", "<|endoftext|>"):
         text = text.replace(token, "")
-    return text.strip()
+    if strip:
+        return text.strip()
+    return text
 
 
 def openai_to_anthropic_response(openai_response: dict[str, Any], model: str, request: dict[str, Any]) -> dict[str, Any]:
@@ -215,6 +413,20 @@ def anthropic_to_openai_request(request: dict[str, Any], default_model: str) -> 
         system_text = anthropic_content_to_text(system)
         openai_request["messages"].insert(0, {"role": "system", "content": system_text})
 
+    if web_tools_enabled():
+        openai_request["messages"].insert(
+            0,
+            {
+                "role": "system",
+                "content": (
+                    "You can use web_search for current web results and web_fetch "
+                    "to read a specific URL when live information is needed. Use "
+                    "these tools before answering questions that require current "
+                    "or source-specific information."
+                ),
+            },
+        )
+
     for src, dst in (
         ("max_tokens", "max_tokens"),
         ("temperature", "temperature"),
@@ -239,6 +451,7 @@ def anthropic_to_openai_request(request: dict[str, Any], default_model: str) -> 
                     "function": {"name": tool_choice.get("name", "")},
                 }
 
+    add_local_web_tools(openai_request)
     return openai_request
 
 
@@ -407,19 +620,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
             )
 
     def proxy_json(self, request: dict[str, Any], openai_request: dict[str, Any]) -> None:
-        url = f"{self.server.mlx_base_url}/v1/chat/completions"  # type: ignore[attr-defined]
-        upstream_request = {
-            key: value for key, value in openai_request.items() if not key.startswith("_")
-        }
-        upstream = urllib.request.Request(
-            url,
-            data=json.dumps(upstream_request).encode("utf-8"),
-            headers={"content-type": "application/json"},
-            method="POST",
-        )
         try:
-            with urllib.request.urlopen(upstream, timeout=self.server.timeout) as response:  # type: ignore[attr-defined]
-                payload = json.loads(response.read().decode("utf-8"))
+            payload = self.complete_with_local_tools(openai_request)
         except urllib.error.HTTPError as exc:
             self.write_json(exc.code, {"error": exc.read().decode("utf-8")})
             return
@@ -433,7 +635,71 @@ class GatewayHandler(BaseHTTPRequestHandler):
             ),
         )
 
+    def openai_chat_completion(self, openai_request: dict[str, Any]) -> dict[str, Any]:
+        url = f"{self.server.mlx_base_url}/v1/chat/completions"  # type: ignore[attr-defined]
+        upstream_request = {
+            key: value for key, value in openai_request.items() if not key.startswith("_")
+        }
+        upstream = urllib.request.Request(
+            url,
+            data=json.dumps(upstream_request).encode("utf-8"),
+            headers={"content-type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(upstream, timeout=self.server.timeout) as response:  # type: ignore[attr-defined]
+            return json.loads(response.read().decode("utf-8"))
+
+    def complete_with_local_tools(self, openai_request: dict[str, Any]) -> dict[str, Any]:
+        request_for_loop = dict(openai_request)
+        request_for_loop["stream"] = False
+
+        for _ in range(3):
+            payload = self.openai_chat_completion(request_for_loop)
+            choice = (payload.get("choices") or [{}])[0]
+            message = choice.get("message") or {}
+            tool_calls = message.get("tool_calls") or []
+            local_tool_calls = [
+                tool_call
+                for tool_call in tool_calls
+                if (tool_call.get("function") or {}).get("name")
+                in ("web_search", "web_fetch")
+            ]
+            if not local_tool_calls or len(local_tool_calls) != len(tool_calls):
+                return payload
+
+            request_for_loop["messages"].append(
+                {
+                    "role": "assistant",
+                    "content": message.get("content"),
+                    "tool_calls": tool_calls,
+                }
+            )
+            for tool_call in local_tool_calls:
+                function = tool_call.get("function") or {}
+                request_for_loop["messages"].append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.get("id", now_id("toolu")),
+                        "content": execute_local_tool(
+                            function.get("name", ""),
+                            parse_tool_arguments(function.get("arguments")),
+                            self.server.timeout,  # type: ignore[attr-defined]
+                        ),
+                    }
+                )
+
+        return payload
+
     def proxy_stream(self, request: dict[str, Any], openai_request: dict[str, Any]) -> None:
+        if web_tools_enabled():
+            try:
+                payload = self.complete_with_local_tools(openai_request)
+            except urllib.error.HTTPError as exc:
+                self.send_json_stream_error(exc.read().decode("utf-8"))
+                return
+            self.send_anthropic_text_stream(request, openai_request, payload)
+            return
+
         url = f"{self.server.mlx_base_url}/v1/chat/completions"  # type: ignore[attr-defined]
         upstream_request = {
             key: value for key, value in openai_request.items() if not key.startswith("_")
@@ -479,7 +745,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
                     delta = choice.get("delta") or {}
                     text = delta.get("content")
                     if text:
-                        text = clean_model_text(text)
+                        text = clean_model_text(text, strip=False)
                     if text:
                         output_tokens += estimate_tokens(text)
                         self.send_event("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}})
@@ -489,6 +755,55 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
         self.send_event("content_block_stop", {"type": "content_block_stop", "index": 0})
         self.send_event("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": output_tokens}})
+        self.send_event("message_stop", {"type": "message_stop"})
+
+    def send_json_stream_error(self, message: str) -> None:
+        self.send_response(200)
+        self.send_header("content-type", "text/event-stream")
+        self.send_header("cache-control", "no-cache")
+        self.end_headers()
+        self.send_event(
+            "error",
+            {
+                "type": "error",
+                "error": {"type": "upstream_error", "message": message},
+            },
+        )
+
+    def send_anthropic_text_stream(
+        self,
+        request: dict[str, Any],
+        openai_request: dict[str, Any],
+        payload: dict[str, Any],
+    ) -> None:
+        model = openai_request.get("_anthropic_model") or openai_request["model"]
+        anthropic_response = openai_to_anthropic_response(payload, model, request)
+        text = "".join(
+            block.get("text", "")
+            for block in anthropic_response.get("content", [])
+            if block.get("type") == "text"
+        )
+
+        self.send_response(200)
+        self.send_header("content-type", "text/event-stream")
+        self.send_header("cache-control", "no-cache")
+        self.end_headers()
+
+        self.send_event("message_start", {"type": "message_start", "message": {
+            "id": anthropic_response["id"],
+            "type": "message",
+            "role": "assistant",
+            "model": model,
+            "content": [],
+            "stop_reason": None,
+            "stop_sequence": None,
+            "usage": {"input_tokens": estimate_tokens(request), "output_tokens": 0},
+        }})
+        self.send_event("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}})
+        if text:
+            self.send_event("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}})
+        self.send_event("content_block_stop", {"type": "content_block_stop", "index": 0})
+        self.send_event("message_delta", {"type": "message_delta", "delta": {"stop_reason": anthropic_response["stop_reason"], "stop_sequence": None}, "usage": {"output_tokens": estimate_tokens(text)}})
         self.send_event("message_stop", {"type": "message_stop"})
 
     def send_event(self, event: str, payload: dict[str, Any]) -> None:
