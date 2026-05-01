@@ -441,6 +441,37 @@ def execute_local_tool(name: str, arguments: Any, timeout: float) -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
+def extract_plain_text_tool_call(text: str | None) -> dict[str, Any] | None:
+    if not text:
+        return None
+
+    cleaned = clean_model_text(text)
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.DOTALL)
+    if fenced:
+        cleaned = fenced.group(1)
+
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+
+    try:
+        value = json.loads(cleaned[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+
+    if not isinstance(value, dict):
+        return None
+
+    name = value.get("name") or value.get("tool") or value.get("function")
+    arguments = value.get("arguments") or value.get("input") or {}
+    if name not in ("web_search", "web_fetch"):
+        return None
+    if not isinstance(arguments, dict):
+        arguments = {}
+    return {"name": name, "arguments": arguments}
+
+
 def parse_tool_arguments(arguments: Any) -> Any:
     if isinstance(arguments, dict):
         return arguments
@@ -762,14 +793,43 @@ class GatewayHandler(BaseHTTPRequestHandler):
             choice = (payload.get("choices") or [{}])[0]
             message = choice.get("message") or {}
             tool_calls = message.get("tool_calls") or []
+            plain_tool_call = extract_plain_text_tool_call(message.get("content"))
             local_tool_calls = [
                 tool_call
                 for tool_call in tool_calls
                 if (tool_call.get("function") or {}).get("name")
                 in ("web_search", "web_fetch")
             ]
-            if not local_tool_calls or len(local_tool_calls) != len(tool_calls):
+            if not local_tool_calls and not plain_tool_call:
                 return payload
+            if tool_calls and len(local_tool_calls) != len(tool_calls):
+                return payload
+
+            if plain_tool_call:
+                tool_result = execute_local_tool(
+                    plain_tool_call["name"],
+                    plain_tool_call["arguments"],
+                    self.server.timeout,  # type: ignore[attr-defined]
+                )
+                request_for_loop["messages"].append(
+                    {
+                        "role": "assistant",
+                        "content": message.get("content"),
+                    }
+                )
+                request_for_loop["messages"].append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Tool result for {plain_tool_call['name']}:\n"
+                            f"{tool_result}\n\n"
+                            "Use these results to answer the original question. "
+                            "Do not output another tool JSON object unless another "
+                            "web_search or web_fetch is strictly necessary."
+                        ),
+                    }
+                )
+                continue
 
             request_for_loop["messages"].append(
                 {
