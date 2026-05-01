@@ -56,6 +56,7 @@ Tune it with:
 AUTO_WEB_VERIFY=1 \
 AUTO_WEB_MODE=balanced \
 AUTO_WEB_MAX_RESULTS=5 \
+AUTO_WEB_TOOL_BUDGET=2 \
 AUTO_WEB_TIMEOUT=8 \
 ./start-local-claude.sh
 ```
@@ -67,6 +68,13 @@ Automatic verification modes:
 - `AUTO_WEB_MODE=deep`: search plus up to three prioritized page fetches.
 
 Override fetch behavior directly with `AUTO_WEB_FETCH_RESULTS` and fetched text size with `AUTO_WEB_MAX_CHARS`.
+
+The gateway follows a Codex/Claude-style strategy:
+
+- Local codebase work uses local files/context first.
+- External, current, source-specific, docs, package, URL, and identity questions trigger web verification.
+- User overrides are respected: saying "search", "verify", "latest", or "docs" forces web use; saying "don't search" or "without web" disables it for that request.
+- Tool use is budgeted per turn with `AUTO_WEB_TOOL_BUDGET`.
 
 Disable automatic web verification with:
 

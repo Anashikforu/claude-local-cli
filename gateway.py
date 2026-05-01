@@ -160,6 +160,10 @@ def auto_web_timeout() -> float:
     return float(os.getenv("AUTO_WEB_TIMEOUT", "8"))
 
 
+def auto_web_tool_budget() -> int:
+    return max(0, int(os.getenv("AUTO_WEB_TOOL_BUDGET", "2")))
+
+
 def auto_web_mode() -> str:
     mode = os.getenv("AUTO_WEB_MODE", "balanced").lower()
     if mode not in ("fast", "balanced", "deep"):
@@ -276,9 +280,34 @@ def latest_user_text(messages: list[dict[str, Any]]) -> str:
     return ""
 
 
+def user_disables_web(text: str) -> bool:
+    lowered = text.lower()
+    return bool(
+        re.search(
+            r"\b(do not|don't|dont|no|without|avoid|skip)\s+(web|search|internet|online|lookup|look up|verify)\b",
+            lowered,
+        )
+    )
+
+
+def user_forces_web(text: str) -> bool:
+    lowered = text.lower()
+    return bool(
+        re.search(
+            r"\b(search|look\s+up|verify|fact[- ]?check|browse|use\s+web|check\s+online|latest|current|docs?|documentation|source|citation|cite)\b",
+            lowered,
+        )
+    )
+
+
 def request_needs_web_verification(text: str) -> bool:
     if not text or not web_tools_enabled() or not auto_web_verify_enabled():
         return False
+
+    if user_disables_web(text):
+        return False
+    if user_forces_web(text):
+        return True
 
     lowered = text.lower()
     if re.search(r"https?://\S+", text):
@@ -740,10 +769,13 @@ def anthropic_to_openai_request(request: dict[str, Any], default_model: str) -> 
             {
                 "role": "system",
                 "content": (
-                    "You can use web_search for current web results and web_fetch "
-                    "to read a specific URL when live information is needed. Use "
-                    "these tools before answering questions that require current "
-                    "or source-specific information."
+                    "Web strategy: For local codebase tasks, use the provided files "
+                    "and conversation context first; do not search the web unless "
+                    "external facts, current information, official docs, package "
+                    "versions, APIs, URLs, or source-specific verification are needed. "
+                    "When live evidence is needed, use web_search and then web_fetch "
+                    "only for the most relevant source URLs. Cite URLs for factual "
+                    "claims. If the evidence is insufficient, say so instead of guessing."
                 ),
             },
         )
@@ -986,6 +1018,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         request_for_loop = dict(openai_request)
         request_for_loop["stream"] = False
 
+        tool_budget = auto_web_tool_budget()
         for _ in range(3):
             payload = self.openai_chat_completion(request_for_loop)
             choice = (payload.get("choices") or [{}])[0]
@@ -1004,10 +1037,23 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 return payload
 
             if plain_tool_call:
+                if tool_budget <= 0:
+                    request_for_loop["messages"].append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Web tool budget exhausted. Answer only from the "
+                                "available evidence, or say you do not have enough "
+                                "reliable evidence."
+                            ),
+                        }
+                    )
+                    continue
+                tool_budget -= 1
                 tool_result = execute_local_tool(
                     plain_tool_call["name"],
                     plain_tool_call["arguments"],
-                    self.server.timeout,  # type: ignore[attr-defined]
+                    min(auto_web_timeout(), self.server.timeout),  # type: ignore[attr-defined]
                 )
                 request_for_loop["messages"].append(
                     {
@@ -1037,6 +1083,19 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 }
             )
             for tool_call in local_tool_calls:
+                if tool_budget <= 0:
+                    request_for_loop["messages"].append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Web tool budget exhausted. Answer only from the "
+                                "available evidence, or say you do not have enough "
+                                "reliable evidence."
+                            ),
+                        }
+                    )
+                    break
+                tool_budget -= 1
                 function = tool_call.get("function") or {}
                 request_for_loop["messages"].append(
                     {
@@ -1045,7 +1104,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
                         "content": execute_local_tool(
                             function.get("name", ""),
                             parse_tool_arguments(function.get("arguments")),
-                            self.server.timeout,  # type: ignore[attr-defined]
+                            min(auto_web_timeout(), self.server.timeout),  # type: ignore[attr-defined]
                         ),
                     }
                 )
