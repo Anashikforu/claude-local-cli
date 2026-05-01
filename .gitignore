@@ -1,29 +1,79 @@
-.venv/
+# Byte-compiled / optimized files
 __pycache__/
-*.pyc
+*.py[codz]
+*$py.class
 
 # Local model/runtime artifacts
 models/
 .hf-cache/
+.venv/
+env/
+venv/
+ENV/
+
+# Local config/secrets
+.env
+.env.*
+.envrc
 
 # Logs and local output
 *.log
 *.out
 *.err
+pip-log.txt
+pip-delete-this-directory.txt
 
-# Local config/secrets
-.env
-.env.*
+# Python packaging/test artifacts
+.Python
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+*.py.cover
+
+# Python tooling/local state
+__pypackages__/
+.pdm-python
+.pdm-build/
+.pixi/
+.pyre/
+.pytype/
+.cache/
 
 # OS/editor files
 .DS_Store
 *.swp
 *.swo
+.idea/
+.vscode/
+tempCodeRunnerFile.py
 
-# Python packaging/test artifacts
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-build/
-dist/
-*.egg-info/
+# App/framework local state
+instance/
+.webassets-cache/
+.scrapy/
+docs/_build/
+/site
+.streamlit/secrets.toml
