@@ -117,6 +117,34 @@ CLAUDE_MODEL=qwen-coder \
 ./start-local-claude.sh
 ```
 
+## Testing and Benchmarks
+
+Run deterministic unit tests:
+
+```bash
+.venv/bin/python -m unittest discover -s tests
+```
+
+Start services without opening an interactive Claude session:
+
+```bash
+./start-local-claude.sh --debug-services
+```
+
+In another terminal, run gateway smoke tests:
+
+```bash
+.venv/bin/python scripts/run_smoke_tests.py --base-url http://127.0.0.1:3001
+```
+
+Run response benchmarks:
+
+```bash
+.venv/bin/python scripts/run_benchmarks.py --base-url http://127.0.0.1:3001
+```
+
+Benchmark cases live in `benchmarks/prompts.jsonl`. Each case can check latency, required text, forbidden text, and special-token leaks.
+
 ## Manual Start
 
 ### 1. Start MLX-LM

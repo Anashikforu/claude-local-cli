@@ -158,7 +158,7 @@ def auto_web_verify_enabled() -> bool:
 
 def auto_web_policy() -> str:
     policy = os.getenv("AUTO_WEB_VERIFY", "smart").lower()
-    if policy in ("1", "true", "yes", "on"):
+    if policy in ("1", "true", "yes", "on", "always"):
         return "always"
     if policy in ("0", "false", "no", "off"):
         return "off"
