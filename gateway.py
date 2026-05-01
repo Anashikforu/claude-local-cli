@@ -152,6 +152,10 @@ def web_tools_enabled() -> bool:
     return os.getenv("ENABLE_WEB_TOOLS", "1").lower() not in ("0", "false", "no")
 
 
+def auto_web_verify_enabled() -> bool:
+    return os.getenv("AUTO_WEB_VERIFY", "1").lower() not in ("0", "false", "no")
+
+
 def accuracy_policy_enabled() -> bool:
     return os.getenv("ENABLE_ACCURACY_POLICY", "1").lower() not in ("0", "false", "no")
 
@@ -240,6 +244,113 @@ def add_local_web_tools(openai_request: dict[str, Any]) -> None:
 
     if "tool_choice" not in openai_request:
         openai_request["tool_choice"] = "auto"
+
+
+def latest_user_text(messages: list[dict[str, Any]]) -> str:
+    for message in reversed(messages):
+        if message.get("role") == "user":
+            return str(message.get("content") or "")
+    return ""
+
+
+def request_needs_web_verification(text: str) -> bool:
+    if not text or not web_tools_enabled() or not auto_web_verify_enabled():
+        return False
+
+    lowered = text.lower()
+    if re.search(r"https?://\S+", text):
+        return True
+
+    trigger_patterns = (
+        r"\bwho\s+(is|are|was|were)\b",
+        r"\bwhat\s+(is|are|was|were)\s+the\s+(latest|current|recent)\b",
+        r"\b(latest|current|today|yesterday|recent|now|new|update|news)\b",
+        r"\b(search|look\s+up|verify|fact[- ]?check|source|citation|cite)\b",
+        r"\b(github|paper|arxiv|pubmed|docs?|documentation|api|package|release)\b",
+        r"\b(company|startup|ceo|founder|professor|researcher|student|iit|kgp)\b",
+        r"\b(price|stock|legal|law|medical|health|finance|weather|sports)\b",
+    )
+    if any(re.search(pattern, lowered) for pattern in trigger_patterns):
+        return True
+
+    words = re.findall(r"\b[A-Z][A-Za-z0-9.-]*\b", text)
+    return len(words) >= 2 and "?" in text
+
+
+def search_query_for_request(text: str) -> str:
+    url_match = re.search(r"https?://\S+", text)
+    if url_match:
+        return url_match.group(0).rstrip(").,]")
+    text = " ".join(text.split())
+    text = re.sub(r"^(do you know|who is|what is|tell me about)\s+", "", text, flags=re.I)
+    return text.strip(" ?")[:200]
+
+
+def result_has_url(result: dict[str, Any]) -> bool:
+    return bool(str(result.get("url", "")).startswith(("http://", "https://")))
+
+
+def fetch_priority(result: dict[str, Any]) -> int:
+    url = str(result.get("url", "")).lower()
+    if "linkedin.com" in url or "facebook.com" in url or "instagram.com" in url:
+        return 3
+    if ".edu" in url or ".ac." in url or "iitkgp.ac.in" in url:
+        return 0
+    if "github.com" in url or "researchgate.net" in url or "scholar.google" in url:
+        return 1
+    return 2
+
+
+def build_web_evidence_for_request(text: str, timeout: float) -> str | None:
+    if not request_needs_web_verification(text):
+        return None
+
+    query = search_query_for_request(text)
+    if not query:
+        return None
+
+    evidence: dict[str, Any] = {"query": query, "search": None, "fetched_pages": []}
+    try:
+        if query.startswith(("http://", "https://")):
+            evidence["fetched_pages"].append(
+                {"url": query, "text": http_get_text(query, timeout)[:6000]}
+            )
+        else:
+            search_result = web_search(query, int(os.getenv("AUTO_WEB_MAX_RESULTS", "5")), timeout)
+            evidence["search"] = search_result
+            results_to_fetch = sorted(
+                search_result.get("results", []),
+                key=fetch_priority,
+            )[: int(os.getenv("AUTO_WEB_FETCH_RESULTS", "2"))]
+            for result in results_to_fetch:
+                if not result_has_url(result):
+                    continue
+                try:
+                    evidence["fetched_pages"].append(
+                        {
+                            "url": result["url"],
+                            "title": result.get("title", ""),
+                            "text": http_get_text(result["url"], timeout)[:4000],
+                        }
+                    )
+                except Exception as exc:  # noqa: BLE001 - keep other evidence
+                    evidence["fetched_pages"].append(
+                        {
+                            "url": result["url"],
+                            "title": result.get("title", ""),
+                            "error": f"{exc.__class__.__name__}: {exc}",
+                        }
+                    )
+    except Exception as exc:  # noqa: BLE001 - evidence failure should be visible
+        evidence["error"] = f"{exc.__class__.__name__}: {exc}"
+
+    return (
+        "Automatic web verification evidence for the user's latest request:\n"
+        f"{json.dumps(evidence, ensure_ascii=False, indent=2)}\n\n"
+        "Use this evidence to answer. Cite source URLs when making factual claims. "
+        "If the evidence is empty, weak, ambiguous, or does not support an answer, "
+        "say you do not have enough reliable evidence instead of guessing."
+    )
 
 
 class TextExtractor(HTMLParser):
@@ -763,6 +874,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             openai_request = anthropic_to_openai_request(
                 request, self.server.default_model  # type: ignore[attr-defined]
             )
+            self.add_auto_web_evidence(openai_request)
             if openai_request.get("stream"):
                 self.proxy_stream(request, openai_request)
             else:
@@ -776,6 +888,17 @@ class GatewayHandler(BaseHTTPRequestHandler):
                         "message": str(exc),
                     }
                 },
+            )
+
+    def add_auto_web_evidence(self, openai_request: dict[str, Any]) -> None:
+        evidence = build_web_evidence_for_request(
+            latest_user_text(openai_request.get("messages", [])),
+            self.server.timeout,  # type: ignore[attr-defined]
+        )
+        if evidence:
+            openai_request["messages"].insert(
+                0,
+                {"role": "system", "content": evidence},
             )
 
     def proxy_json(self, request: dict[str, Any], openai_request: dict[str, Any]) -> None:
