@@ -59,8 +59,11 @@ WEB_POLICY=auto \
 SEARCH_DEPTH=agentic \
 WEB_CONTEXT_SIZE=medium \
 WEB_MAX_USES=2 \
+WEB_MAX_TOOL_RESULT_CHARS=6000 \
+AUTO_WEB_MAX_CHARS=1500 \
 WEB_BLOCKED_DOMAINS=reddit.com,quora.com \
 WEB_USE_JINA_READER=1 \
+TAVILY_INCLUDE_RAW_CONTENT=0 \
 AUTO_WEB_TIMEOUT=8 \
 ./start-local-claude.sh
 ```
@@ -113,6 +116,7 @@ The gateway follows a Codex/Claude-style strategy:
 - Tool use is budgeted per turn with `WEB_MAX_USES`.
 - Domain controls mirror Claude/OpenAI-style filters with `WEB_ALLOWED_DOMAINS` and `WEB_BLOCKED_DOMAINS`.
 - Page extraction uses Jina Reader when `WEB_USE_JINA_READER=1`.
+- Web evidence is capped by default. Keep `TAVILY_INCLUDE_RAW_CONTENT=0` unless you explicitly want large Tavily page content.
 - Fetched pages are treated as untrusted evidence; page instructions are stripped/ignored.
 
 Disable automatic web verification with:

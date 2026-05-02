@@ -205,8 +205,16 @@ def auto_web_fetch_count() -> int:
 
 def auto_web_max_chars() -> int:
     if "AUTO_WEB_MAX_CHARS" in os.environ:
-        return max(500, int(os.getenv("AUTO_WEB_MAX_CHARS", "3000")))
-    return {"low": 0, "medium": 3000, "high": 8000}[web_context_size()]
+        return max(500, min(int(os.getenv("AUTO_WEB_MAX_CHARS", "1500")), 6000))
+    return {"low": 0, "medium": 1500, "high": 3000}[web_context_size()]
+
+
+def max_tool_result_chars() -> int:
+    return max(1000, min(int(os.getenv("WEB_MAX_TOOL_RESULT_CHARS", "6000")), 20000))
+
+
+def tavily_raw_content_enabled() -> bool:
+    return os.getenv("TAVILY_INCLUDE_RAW_CONTENT", "0").lower() in ("1", "true", "yes")
 
 
 def jina_reader_enabled() -> bool:
@@ -468,7 +476,7 @@ def build_web_evidence_for_request(text: str, timeout: float) -> str | None:
     try:
         if query.startswith(("http://", "https://")):
             evidence["fetched_pages"].append(
-                {"url": query, "text": http_get_text(query, timeout)[: max(auto_web_max_chars(), 6000)]}
+                {"url": query, "text": http_get_text(query, timeout)[: max(auto_web_max_chars(), 1500)]}
             )
         else:
             search_result = web_search(query, int(os.getenv("AUTO_WEB_MAX_RESULTS", "5")), timeout)
@@ -577,7 +585,7 @@ def http_get_raw_text(url: str, timeout: float, max_bytes: int = 2_000_000) -> s
     return raw.decode(charset, errors="replace")
 
 
-def http_get_text(url: str, timeout: float, max_bytes: int = 2_000_000) -> str:
+def http_get_text(url: str, timeout: float, max_bytes: int = 500_000) -> str:
     if jina_reader_enabled():
         try:
             return strip_prompt_injection(
@@ -644,7 +652,11 @@ def web_search(query: str, max_results: int, timeout: float) -> dict[str, Any]:
 
 def tavily_search(query: str, max_results: int, timeout: float) -> dict[str, Any]:
     api_key = os.getenv("TAVILY_API_KEY", "")
-    include_raw_content = "markdown" if web_context_size() in ("medium", "high") else False
+    include_raw_content = (
+        "markdown"
+        if tavily_raw_content_enabled() and web_context_size() in ("medium", "high")
+        else False
+    )
     payload = {
         "query": query,
         "max_results": max_results,
@@ -786,7 +798,7 @@ def execute_local_tool(name: str, arguments: Any, timeout: float) -> str:
             raise ValueError(f"Unknown local tool: {name}")
     except Exception as exc:  # noqa: BLE001 - tool errors should return to the model
         result = {"error": exc.__class__.__name__, "message": str(exc)}
-    return json.dumps(result, ensure_ascii=False)
+    return json.dumps(result, ensure_ascii=False)[:max_tool_result_chars()]
 
 
 def extract_plain_text_tool_call(text: str | None) -> dict[str, Any] | None:
