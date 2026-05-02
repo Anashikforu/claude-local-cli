@@ -32,6 +32,8 @@ For better search quality, configure a real search API. Claude Local CLI uses pr
 2. Brave Search when `BRAVE_SEARCH_API_KEY` is set.
 3. DuckDuckGo HTML as a no-key fallback.
 
+Tavily is the recommended backend because it is built for AI agents and can return LLM-ready page content. Page fetching uses Jina Reader by default before falling back to the built-in HTML extractor.
+
 Examples:
 
 ```bash
@@ -59,6 +61,7 @@ WEB_CONTEXT_SIZE=medium \
 WEB_MAX_USES=2 \
 WEB_ALLOWED_DOMAINS=docs.python.org,github.com \
 WEB_BLOCKED_DOMAINS=reddit.com,quora.com \
+WEB_USE_JINA_READER=1 \
 AUTO_WEB_TIMEOUT=8 \
 ./start-local-claude.sh
 ```
@@ -86,6 +89,8 @@ The gateway follows a Codex/Claude-style strategy:
 - User overrides are respected: saying "search", "verify", "latest", or "docs" forces web use; saying "don't search" or "without web" disables it for that request.
 - Tool use is budgeted per turn with `WEB_MAX_USES`.
 - Domain controls mirror Claude/OpenAI-style filters with `WEB_ALLOWED_DOMAINS` and `WEB_BLOCKED_DOMAINS`.
+- Page extraction uses Jina Reader when `WEB_USE_JINA_READER=1`.
+- Fetched pages are treated as untrusted evidence; page instructions are stripped/ignored.
 
 Disable automatic web verification with:
 
