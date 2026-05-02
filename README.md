@@ -52,17 +52,25 @@ Claude Local CLI injects an accuracy policy by default. The model is instructed 
 
 Automatic web verification uses `smart` mode by default. For normal coding tasks, the gateway keeps the model focused on local files/context. For questions that look current, source-specific, personal, high-risk, docs-related, or explicitly ask to search/verify, the gateway searches before the local model answers and injects the evidence into the prompt.
 
-Tune it with:
+The launch scripts set these defaults:
 
 ```bash
 WEB_POLICY=auto \
 SEARCH_DEPTH=agentic \
 WEB_CONTEXT_SIZE=medium \
 WEB_MAX_USES=2 \
-WEB_ALLOWED_DOMAINS=docs.python.org,github.com \
 WEB_BLOCKED_DOMAINS=reddit.com,quora.com \
 WEB_USE_JINA_READER=1 \
 AUTO_WEB_TIMEOUT=8 \
+./start-local-claude.sh
+```
+
+Tune them by exporting overrides before running `./start-local-claude.sh`. For example:
+
+```bash
+TAVILY_API_KEY=tvly-your-key \
+WEB_SEARCH_PROVIDER=tavily \
+WEB_ALLOWED_DOMAINS=docs.python.org,github.com \
 ./start-local-claude.sh
 ```
 

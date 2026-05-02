@@ -6,6 +6,13 @@ set -euo pipefail
 : "${GATEWAY_PORT:=3001}"
 : "${MLX_BASE_URL:=http://127.0.0.1:${MLX_PORT}}"
 : "${CLAUDE_MODEL:=claude-sonnet-4-5}"
+: "${WEB_POLICY:=auto}"
+: "${SEARCH_DEPTH:=agentic}"
+: "${WEB_CONTEXT_SIZE:=medium}"
+: "${WEB_MAX_USES:=2}"
+: "${WEB_USE_JINA_READER:=1}"
+: "${WEB_BLOCKED_DOMAINS:=reddit.com,quora.com}"
+: "${AUTO_WEB_TIMEOUT:=8}"
 
 cd "$(dirname "$0")"
 
@@ -89,7 +96,21 @@ wait_for_url "MLX-LM" "${MLX_BASE_URL}/v1/models" 180 || {
 }
 
 echo "Starting Claude MLX gateway on http://127.0.0.1:${GATEWAY_PORT}"
-MLX_MODEL="$MLX_MODEL" MLX_BASE_URL="$MLX_BASE_URL" GATEWAY_PORT="$GATEWAY_PORT" ./run-gateway.sh >"$GATEWAY_LOG" 2>&1 &
+MLX_MODEL="$MLX_MODEL" \
+MLX_BASE_URL="$MLX_BASE_URL" \
+GATEWAY_PORT="$GATEWAY_PORT" \
+WEB_POLICY="$WEB_POLICY" \
+SEARCH_DEPTH="$SEARCH_DEPTH" \
+WEB_CONTEXT_SIZE="$WEB_CONTEXT_SIZE" \
+WEB_MAX_USES="$WEB_MAX_USES" \
+WEB_USE_JINA_READER="$WEB_USE_JINA_READER" \
+WEB_BLOCKED_DOMAINS="$WEB_BLOCKED_DOMAINS" \
+WEB_ALLOWED_DOMAINS="${WEB_ALLOWED_DOMAINS:-}" \
+WEB_SEARCH_PROVIDER="${WEB_SEARCH_PROVIDER:-auto}" \
+TAVILY_API_KEY="${TAVILY_API_KEY:-}" \
+BRAVE_SEARCH_API_KEY="${BRAVE_SEARCH_API_KEY:-}" \
+AUTO_WEB_TIMEOUT="$AUTO_WEB_TIMEOUT" \
+./run-gateway.sh >"$GATEWAY_LOG" 2>&1 &
 GATEWAY_PID="$!"
 
 wait_for_url "gateway" "http://127.0.0.1:${GATEWAY_PORT}/health" 30 || {
@@ -112,6 +133,7 @@ fi
 echo "Gateway self-test passed"
 
 echo "Starting Claude Code with local model: ${CLAUDE_MODEL}"
+echo "Web policy: ${WEB_POLICY}, search depth: ${SEARCH_DEPTH}, context: ${WEB_CONTEXT_SIZE}, max uses: ${WEB_MAX_USES}"
 echo "MLX log: ${MLX_LOG}"
 echo "Gateway log: ${GATEWAY_LOG}"
 
