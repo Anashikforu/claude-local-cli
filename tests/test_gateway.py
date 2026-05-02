@@ -164,15 +164,50 @@ class GatewayConversionTests(unittest.TestCase):
 
 class GatewayWebPolicyTests(unittest.TestCase):
     def test_all_auto_web_policies(self):
-        with patch.dict(os.environ, {"AUTO_WEB_VERIFY": "off"}):
+        with patch.dict(os.environ, {"WEB_POLICY": "off"}):
             self.assertFalse(gateway.request_needs_web_verification("latest mlx docs"))
 
-        with patch.dict(os.environ, {"AUTO_WEB_VERIFY": "always"}):
+        with patch.dict(os.environ, {"WEB_POLICY": "force"}):
             self.assertTrue(gateway.request_needs_web_verification("fix this bug"))
 
-        with patch.dict(os.environ, {"AUTO_WEB_VERIFY": "ask"}):
+        with patch.dict(os.environ, {"WEB_POLICY": "ask"}):
             self.assertFalse(gateway.request_needs_web_verification("who is Ada Lovelace?"))
             self.assertTrue(gateway.request_needs_web_verification("search Ada Lovelace"))
+
+    def test_search_depth_and_context_size_aliases(self):
+        with patch.dict(os.environ, {"SEARCH_DEPTH": "quick"}, clear=False):
+            self.assertEqual("fast", gateway.auto_web_mode())
+            self.assertEqual("low", gateway.web_context_size())
+            self.assertEqual(0, gateway.auto_web_fetch_count())
+
+        with patch.dict(os.environ, {"SEARCH_DEPTH": "agentic"}, clear=False):
+            self.assertEqual("balanced", gateway.auto_web_mode())
+            self.assertEqual("medium", gateway.web_context_size())
+            self.assertEqual(1, gateway.auto_web_fetch_count())
+
+    def test_domain_filters(self):
+        search_result = {
+            "provider": "test",
+            "query": "docs",
+            "results": [
+                {"title": "Python", "url": "https://docs.python.org/3/", "snippet": ""},
+                {"title": "Reddit", "url": "https://reddit.com/r/python", "snippet": ""},
+            ],
+        }
+
+        with patch.dict(
+            os.environ,
+            {
+                "WEB_ALLOWED_DOMAINS": "docs.python.org",
+                "WEB_BLOCKED_DOMAINS": "reddit.com",
+            },
+        ):
+            filtered = gateway.apply_domain_filters(search_result)
+
+        self.assertEqual(
+            ["https://docs.python.org/3/"],
+            [result["url"] for result in filtered["results"]],
+        )
 
     def test_fetch_priority_prefers_official_academic_sources(self):
         self.assertLess(

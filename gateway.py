@@ -153,16 +153,21 @@ def web_tools_enabled() -> bool:
 
 
 def auto_web_verify_enabled() -> bool:
-    return os.getenv("AUTO_WEB_VERIFY", "smart").lower() not in ("0", "false", "no", "off")
+    policy = os.getenv("WEB_POLICY", os.getenv("AUTO_WEB_VERIFY", "smart")).lower()
+    return policy not in ("0", "false", "no", "off")
 
 
 def auto_web_policy() -> str:
-    policy = os.getenv("AUTO_WEB_VERIFY", "smart").lower()
+    policy = os.getenv("WEB_POLICY", os.getenv("AUTO_WEB_VERIFY", "smart")).lower()
     if policy in ("1", "true", "yes", "on", "always"):
         return "always"
     if policy in ("0", "false", "no", "off"):
         return "off"
-    if policy not in ("smart", "ask"):
+    if policy == "force":
+        return "always"
+    if policy not in ("auto", "smart", "ask"):
+        return "smart"
+    if policy == "auto":
         return "smart"
     return policy
 
@@ -172,26 +177,35 @@ def auto_web_timeout() -> float:
 
 
 def auto_web_tool_budget() -> int:
-    return max(0, int(os.getenv("AUTO_WEB_TOOL_BUDGET", "2")))
+    return max(0, int(os.getenv("WEB_MAX_USES", os.getenv("AUTO_WEB_TOOL_BUDGET", "2"))))
 
 
 def auto_web_mode() -> str:
-    mode = os.getenv("AUTO_WEB_MODE", "balanced").lower()
+    mode = os.getenv("SEARCH_DEPTH", os.getenv("AUTO_WEB_MODE", "balanced")).lower()
+    aliases = {"quick": "fast", "agentic": "balanced"}
+    mode = aliases.get(mode, mode)
     if mode not in ("fast", "balanced", "deep"):
         return "balanced"
     return mode
 
 
+def web_context_size() -> str:
+    size = os.getenv("WEB_CONTEXT_SIZE", "").lower()
+    if size in ("low", "medium", "high"):
+        return size
+    return {"fast": "low", "balanced": "medium", "deep": "high"}[auto_web_mode()]
+
+
 def auto_web_fetch_count() -> int:
     if "AUTO_WEB_FETCH_RESULTS" in os.environ:
         return max(0, int(os.getenv("AUTO_WEB_FETCH_RESULTS", "0")))
-    return {"fast": 0, "balanced": 1, "deep": 3}[auto_web_mode()]
+    return {"low": 0, "medium": 1, "high": 3}[web_context_size()]
 
 
 def auto_web_max_chars() -> int:
     if "AUTO_WEB_MAX_CHARS" in os.environ:
         return max(500, int(os.getenv("AUTO_WEB_MAX_CHARS", "3000")))
-    return {"fast": 0, "balanced": 3000, "deep": 8000}[auto_web_mode()]
+    return {"low": 0, "medium": 3000, "high": 8000}[web_context_size()]
 
 
 def accuracy_policy_enabled() -> bool:
@@ -366,6 +380,52 @@ def result_has_url(result: dict[str, Any]) -> bool:
     return bool(str(result.get("url", "")).startswith(("http://", "https://")))
 
 
+def configured_domains(name: str) -> list[str]:
+    return [
+        domain.strip().lower().removeprefix("http://").removeprefix("https://").strip("/")
+        for domain in os.getenv(name, "").split(",")
+        if domain.strip()
+    ]
+
+
+def url_domain(url: str) -> str:
+    return urllib.parse.urlparse(url).netloc.lower()
+
+
+def domain_matches(domain: str, rule: str) -> bool:
+    return domain == rule or domain.endswith(f".{rule}")
+
+
+def result_allowed_by_domain_filters(result: dict[str, Any]) -> bool:
+    url = str(result.get("url", ""))
+    if not result_has_url(result):
+        return False
+    domain = url_domain(url)
+    allowed_domains = configured_domains("WEB_ALLOWED_DOMAINS")
+    blocked_domains = configured_domains("WEB_BLOCKED_DOMAINS")
+    if blocked_domains and any(domain_matches(domain, rule) for rule in blocked_domains):
+        return False
+    if allowed_domains and not any(domain_matches(domain, rule) for rule in allowed_domains):
+        return False
+    return True
+
+
+def apply_domain_filters(search_result: dict[str, Any]) -> dict[str, Any]:
+    filtered = dict(search_result)
+    results = search_result.get("results", [])
+    filtered["results"] = [
+        result for result in results if result_allowed_by_domain_filters(result)
+    ]
+    filters = {}
+    if configured_domains("WEB_ALLOWED_DOMAINS"):
+        filters["allowed_domains"] = configured_domains("WEB_ALLOWED_DOMAINS")
+    if configured_domains("WEB_BLOCKED_DOMAINS"):
+        filters["blocked_domains"] = configured_domains("WEB_BLOCKED_DOMAINS")
+    if filters:
+        filtered["filters"] = filters
+    return filtered
+
+
 def fetch_priority(result: dict[str, Any]) -> int:
     url = str(result.get("url", "")).lower()
     title = str(result.get("title", "")).lower()
@@ -393,7 +453,10 @@ def build_web_evidence_for_request(text: str, timeout: float) -> str | None:
 
     evidence: dict[str, Any] = {
         "query": query,
-        "mode": auto_web_mode(),
+        "policy": auto_web_policy(),
+        "search_depth": auto_web_mode(),
+        "context_size": web_context_size(),
+        "max_uses": auto_web_tool_budget(),
         "search": None,
         "fetched_pages": [],
     }
@@ -522,14 +585,14 @@ def web_search(query: str, max_results: int, timeout: float) -> dict[str, Any]:
     provider = os.getenv("WEB_SEARCH_PROVIDER", "auto").lower()
 
     if provider in ("auto", "tavily") and os.getenv("TAVILY_API_KEY"):
-        return tavily_search(query, max_results, timeout)
-    if provider in ("auto", "brave") and os.getenv("BRAVE_SEARCH_API_KEY"):
-        return brave_search(query, max_results, timeout)
-    if provider not in ("auto", "duckduckgo", "ddg"):
-        raise ValueError(
-            "WEB_SEARCH_PROVIDER must be auto, tavily, brave, or duckduckgo"
-        )
-    return duckduckgo_search(query, max_results, timeout)
+        result = tavily_search(query, max_results, timeout)
+    elif provider in ("auto", "brave") and os.getenv("BRAVE_SEARCH_API_KEY"):
+        result = brave_search(query, max_results, timeout)
+    elif provider in ("auto", "duckduckgo", "ddg"):
+        result = duckduckgo_search(query, max_results, timeout)
+    else:
+        raise ValueError("WEB_SEARCH_PROVIDER must be auto, tavily, brave, or duckduckgo")
+    return apply_domain_filters(result)
 
 
 def tavily_search(query: str, max_results: int, timeout: float) -> dict[str, Any]:

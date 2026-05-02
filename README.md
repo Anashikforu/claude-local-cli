@@ -53,35 +53,39 @@ Automatic web verification uses `smart` mode by default. For normal coding tasks
 Tune it with:
 
 ```bash
-AUTO_WEB_VERIFY=smart \
-AUTO_WEB_MODE=balanced \
-AUTO_WEB_MAX_RESULTS=5 \
-AUTO_WEB_TOOL_BUDGET=2 \
+WEB_POLICY=auto \
+SEARCH_DEPTH=agentic \
+WEB_CONTEXT_SIZE=medium \
+WEB_MAX_USES=2 \
+WEB_ALLOWED_DOMAINS=docs.python.org,github.com \
+WEB_BLOCKED_DOMAINS=reddit.com,quora.com \
 AUTO_WEB_TIMEOUT=8 \
 ./start-local-claude.sh
 ```
 
-`AUTO_WEB_VERIFY` accepts:
+`WEB_POLICY` accepts:
 
 - `smart`: default; search only when the turn appears to need external/current evidence.
+- `auto`: alias for `smart`.
 - `ask`: search only when the user explicitly asks to search/verify/use docs/latest.
-- `always`: search every turn unless the user says not to.
+- `always` or `force`: search every turn unless the user says not to.
 - `off`: disable automatic verification.
 
 Automatic verification modes:
 
-- `AUTO_WEB_MODE=fast`: search snippets only.
-- `AUTO_WEB_MODE=balanced`: search plus one prioritized page fetch. This is the default.
-- `AUTO_WEB_MODE=deep`: search plus up to three prioritized page fetches.
+- `SEARCH_DEPTH=quick`: search snippets only.
+- `SEARCH_DEPTH=agentic`: search plus one prioritized page fetch. This is the default.
+- `SEARCH_DEPTH=deep`: search plus up to three prioritized page fetches.
 
-Override fetch behavior directly with `AUTO_WEB_FETCH_RESULTS` and fetched text size with `AUTO_WEB_MAX_CHARS`.
+`WEB_CONTEXT_SIZE=low|medium|high` controls how much web evidence is injected. Override fetch behavior directly with `AUTO_WEB_FETCH_RESULTS` and fetched text size with `AUTO_WEB_MAX_CHARS`.
 
 The gateway follows a Codex/Claude-style strategy:
 
 - Local codebase work uses local files/context first.
 - External, current, source-specific, docs, package, URL, and identity questions trigger web verification.
 - User overrides are respected: saying "search", "verify", "latest", or "docs" forces web use; saying "don't search" or "without web" disables it for that request.
-- Tool use is budgeted per turn with `AUTO_WEB_TOOL_BUDGET`.
+- Tool use is budgeted per turn with `WEB_MAX_USES`.
+- Domain controls mirror Claude/OpenAI-style filters with `WEB_ALLOWED_DOMAINS` and `WEB_BLOCKED_DOMAINS`.
 
 Disable automatic web verification with:
 
