@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -37,6 +38,12 @@ def load_cases(path: Path) -> list[dict[str, Any]]:
         if line:
             cases.append(json.loads(line))
     return cases
+
+
+def append_jsonl(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as file:
+        file.write(json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
 def contains_any(text: str, needles: list[str]) -> bool:
@@ -89,6 +96,7 @@ def main() -> int:
     parser.add_argument("--model", default="qwen-coder")
     parser.add_argument("--cases", default="benchmarks/prompts.jsonl")
     parser.add_argument("--timeout", type=float, default=180)
+    parser.add_argument("--log-path", default=os.getenv("BENCHMARK_LOG_PATH", "logs/benchmarks.jsonl"))
     parser.add_argument("--json", action="store_true", help="Print JSONL results only")
     args = parser.parse_args()
 
@@ -118,6 +126,7 @@ def main() -> int:
                 "text_preview": "",
             }
         results.append(result)
+        append_jsonl(Path(args.log_path), result)
         if args.json:
             print(json.dumps(result, ensure_ascii=False))
         else:

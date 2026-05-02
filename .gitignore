@@ -21,6 +21,7 @@ ENV/
 *.log
 *.out
 *.err
+logs/
 pip-log.txt
 pip-delete-this-directory.txt
 

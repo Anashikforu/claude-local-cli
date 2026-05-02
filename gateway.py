@@ -35,6 +35,38 @@ def estimate_tokens(value: Any) -> int:
     return max(1, len(text) // 4)
 
 
+def eval_logging_enabled() -> bool:
+    return os.getenv("ENABLE_EVAL_LOGGING", "1").lower() not in ("0", "false", "no")
+
+
+def eval_log_path() -> str:
+    return os.getenv("EVAL_LOG_PATH", "logs/gateway.jsonl")
+
+
+def eval_log_text_enabled() -> bool:
+    return os.getenv("EVAL_LOG_TEXT", "0").lower() in ("1", "true", "yes")
+
+
+def append_jsonl(path: str, value: dict[str, Any]) -> None:
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as file:
+        file.write(json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+
+def text_health(text: str) -> dict[str, Any]:
+    return {
+        "chars": len(text),
+        "estimated_tokens": estimate_tokens(text),
+        "empty": not bool(text.strip()),
+        "special_token_leak": any(
+            token in text for token in ("<|im_end|>", "<|im_start|>", "<|endoftext|>")
+        ),
+        "raw_tool_json": bool(re.search(r'"\s*name\s*"\s*:\s*"web_(search|fetch)"', text)),
+    }
+
+
 def anthropic_content_to_text(content: Any) -> str:
     if isinstance(content, str):
         return content
@@ -893,6 +925,14 @@ def openai_to_anthropic_response(openai_response: dict[str, Any], model: str, re
     }
 
 
+def anthropic_response_text(response: dict[str, Any]) -> str:
+    return "".join(
+        block.get("text", "")
+        for block in response.get("content", [])
+        if block.get("type") == "text"
+    )
+
+
 def anthropic_to_openai_request(request: dict[str, Any], default_model: str) -> dict[str, Any]:
     requested_model = request.get("model") or default_model
     model = resolve_model(requested_model, default_model)
@@ -1101,6 +1141,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.write_json(404, {"error": {"type": "not_found", "message": path}})
 
     def do_POST(self) -> None:
+        started = time.time()
         path = self.route_path()
         if path == "/v1/messages/count_tokens":
             request = self.read_json()
@@ -1118,9 +1159,10 @@ class GatewayHandler(BaseHTTPRequestHandler):
             )
             self.add_auto_web_evidence(openai_request)
             if openai_request.get("stream"):
-                self.proxy_stream(request, openai_request)
+                response_payload = self.proxy_stream(request, openai_request)
             else:
-                self.proxy_json(request, openai_request)
+                response_payload = self.proxy_json(request, openai_request)
+            self.write_eval_log(request, openai_request, response_payload, started, None)
         except Exception as exc:  # noqa: BLE001 - this is an HTTP boundary
             self.write_json(
                 500,
@@ -1130,6 +1172,13 @@ class GatewayHandler(BaseHTTPRequestHandler):
                         "message": str(exc),
                     }
                 },
+            )
+            self.write_eval_log(
+                locals().get("request", {}),
+                locals().get("openai_request", {}),
+                None,
+                started,
+                exc,
             )
 
     def add_auto_web_evidence(self, openai_request: dict[str, Any]) -> None:
@@ -1145,21 +1194,68 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 {"role": "system", "content": evidence},
             )
 
-    def proxy_json(self, request: dict[str, Any], openai_request: dict[str, Any]) -> None:
+    def write_eval_log(
+        self,
+        request: dict[str, Any],
+        openai_request: dict[str, Any],
+        response_payload: dict[str, Any] | None,
+        started: float,
+        error: Exception | None,
+    ) -> None:
+        if not eval_logging_enabled():
+            return
+
+        latest_text = latest_user_text(openai_request.get("messages", []))
+        response_text = (
+            anthropic_response_text(response_payload)
+            if isinstance(response_payload, dict)
+            else ""
+        )
+        record: dict[str, Any] = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "path": self.route_path(),
+            "latency_seconds": round(time.time() - started, 3),
+            "model": openai_request.get("_anthropic_model") or request.get("model"),
+            "stream": bool(request.get("stream")),
+            "web_enabled": bool(openai_request.get("_web_enabled_this_turn")),
+            "web_policy": auto_web_policy(),
+            "search_depth": auto_web_mode(),
+            "web_context_size": web_context_size(),
+            "web_max_uses": auto_web_tool_budget(),
+            "input": {
+                "chars": len(latest_text),
+                "estimated_tokens": estimate_tokens(latest_text),
+            },
+            "output": text_health(response_text),
+            "error": (
+                {"type": error.__class__.__name__, "message": str(error)}
+                if error
+                else None
+            ),
+        }
+        if eval_log_text_enabled():
+            record["input"]["text"] = latest_text
+            record["output"]["text"] = response_text
+        try:
+            append_jsonl(eval_log_path(), record)
+        except Exception as exc:  # noqa: BLE001 - logging must not break requests
+            if self.server.verbose:  # type: ignore[attr-defined]
+                print(f"Eval logging failed: {exc}")
+
+    def proxy_json(self, request: dict[str, Any], openai_request: dict[str, Any]) -> dict[str, Any] | None:
         try:
             payload = self.complete_with_local_tools(openai_request)
         except urllib.error.HTTPError as exc:
             self.write_json(exc.code, {"error": exc.read().decode("utf-8")})
-            return
+            return None
 
-        self.write_json(
-            200,
-            openai_to_anthropic_response(
-                payload,
-                openai_request.get("_anthropic_model") or openai_request["model"],
-                request,
-            ),
+        response_payload = openai_to_anthropic_response(
+            payload,
+            openai_request.get("_anthropic_model") or openai_request["model"],
+            request,
         )
+        self.write_json(200, response_payload)
+        return response_payload
 
     def openai_chat_completion(self, openai_request: dict[str, Any]) -> dict[str, Any]:
         url = f"{self.server.mlx_base_url}/v1/chat/completions"  # type: ignore[attr-defined]
@@ -1273,15 +1369,14 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
         return payload
 
-    def proxy_stream(self, request: dict[str, Any], openai_request: dict[str, Any]) -> None:
+    def proxy_stream(self, request: dict[str, Any], openai_request: dict[str, Any]) -> dict[str, Any] | None:
         if openai_request.get("_web_enabled_this_turn"):
             try:
                 payload = self.complete_with_local_tools(openai_request)
             except urllib.error.HTTPError as exc:
                 self.send_json_stream_error(exc.read().decode("utf-8"))
-                return
-            self.send_anthropic_text_stream(request, openai_request, payload)
-            return
+                return None
+            return self.send_anthropic_text_stream(request, openai_request, payload)
 
         url = f"{self.server.mlx_base_url}/v1/chat/completions"  # type: ignore[attr-defined]
         upstream_request = {
@@ -1302,6 +1397,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         message_id = now_id("msg")
         model = openai_request.get("_anthropic_model") or openai_request["model"]
         output_tokens = 0
+        text_parts: list[str] = []
         self.send_event("message_start", {"type": "message_start", "message": {
             "id": message_id,
             "type": "message",
@@ -1330,15 +1426,23 @@ class GatewayHandler(BaseHTTPRequestHandler):
                     if text:
                         text = clean_model_text(text, strip=False)
                     if text:
+                        text_parts.append(text)
                         output_tokens += estimate_tokens(text)
                         self.send_event("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}})
         except urllib.error.HTTPError as exc:
             self.send_event("error", {"type": "error", "error": {"type": "upstream_error", "message": exc.read().decode("utf-8")}})
-            return
+            return None
 
         self.send_event("content_block_stop", {"type": "content_block_stop", "index": 0})
         self.send_event("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": output_tokens}})
         self.send_event("message_stop", {"type": "message_stop"})
+        return {
+            "type": "message",
+            "role": "assistant",
+            "model": model,
+            "content": [{"type": "text", "text": "".join(text_parts)}],
+            "stop_reason": "end_turn",
+        }
 
     def send_json_stream_error(self, message: str) -> None:
         self.send_response(200)
@@ -1358,7 +1462,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         request: dict[str, Any],
         openai_request: dict[str, Any],
         payload: dict[str, Any],
-    ) -> None:
+    ) -> dict[str, Any]:
         model = openai_request.get("_anthropic_model") or openai_request["model"]
         anthropic_response = openai_to_anthropic_response(payload, model, request)
         text = "".join(
@@ -1388,6 +1492,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.send_event("content_block_stop", {"type": "content_block_stop", "index": 0})
         self.send_event("message_delta", {"type": "message_delta", "delta": {"stop_reason": anthropic_response["stop_reason"], "stop_sequence": None}, "usage": {"output_tokens": estimate_tokens(text)}})
         self.send_event("message_stop", {"type": "message_stop"})
+        return anthropic_response
 
     def send_event(self, event: str, payload: dict[str, Any]) -> None:
         self.wfile.write(f"event: {event}\n".encode("utf-8"))

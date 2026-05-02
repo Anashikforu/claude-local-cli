@@ -181,6 +181,26 @@ Run response benchmarks:
 
 Benchmark cases live in `benchmarks/prompts.jsonl`. Each case can check latency, required text, forbidden text, and special-token leaks.
 
+## Evaluation Logging
+
+Claude Local CLI writes lightweight JSONL telemetry by default:
+
+- Gateway requests: `logs/gateway.jsonl`
+- Benchmark results: `logs/benchmarks.jsonl`
+
+The logs record latency, web policy decisions, estimated input/output tokens, special-token leaks, raw tool JSON leaks, and errors. Full prompt/output text is disabled by default.
+
+Controls:
+
+```bash
+ENABLE_EVAL_LOGGING=1
+EVAL_LOG_PATH=logs/gateway.jsonl
+EVAL_LOG_TEXT=0
+BENCHMARK_LOG_PATH=logs/benchmarks.jsonl
+```
+
+Set `EVAL_LOG_TEXT=1` only when you explicitly want full prompt/output text in local logs. The `logs/` directory is ignored by git.
+
 ## Manual Start
 
 ### 1. Start MLX-LM

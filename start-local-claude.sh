@@ -25,6 +25,9 @@ fi
 : "${TAVILY_INCLUDE_RAW_CONTENT:=0}"
 : "${WEB_BLOCKED_DOMAINS:=reddit.com,quora.com}"
 : "${AUTO_WEB_TIMEOUT:=8}"
+: "${ENABLE_EVAL_LOGGING:=1}"
+: "${EVAL_LOG_PATH:=logs/gateway.jsonl}"
+: "${EVAL_LOG_TEXT:=0}"
 
 if [ ! -x ".venv/bin/python" ]; then
   echo "Missing .venv. Create it with:" >&2
@@ -123,6 +126,9 @@ WEB_SEARCH_PROVIDER="${WEB_SEARCH_PROVIDER:-auto}" \
 TAVILY_API_KEY="${TAVILY_API_KEY:-}" \
 BRAVE_SEARCH_API_KEY="${BRAVE_SEARCH_API_KEY:-}" \
 AUTO_WEB_TIMEOUT="$AUTO_WEB_TIMEOUT" \
+ENABLE_EVAL_LOGGING="$ENABLE_EVAL_LOGGING" \
+EVAL_LOG_PATH="$EVAL_LOG_PATH" \
+EVAL_LOG_TEXT="$EVAL_LOG_TEXT" \
 ./run-gateway.sh >"$GATEWAY_LOG" 2>&1 &
 GATEWAY_PID="$!"
 
