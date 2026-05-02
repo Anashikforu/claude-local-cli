@@ -74,6 +74,21 @@ WEB_ALLOWED_DOMAINS=docs.python.org,github.com \
 ./start-local-claude.sh
 ```
 
+For permanent local configuration, copy `.env.example` to `.env` and put your key there:
+
+```bash
+cp .env.example .env
+```
+
+Then edit `.env`:
+
+```bash
+WEB_SEARCH_PROVIDER=tavily
+TAVILY_API_KEY=tvly-your-key
+```
+
+Both `./start-local-claude.sh` and `./run-gateway.sh` load `.env` automatically. The `.env` file is ignored by git and should not be committed.
+
 `WEB_POLICY` accepts:
 
 - `smart`: default; search only when the turn appears to need external/current evidence.

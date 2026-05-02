@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+cd "$(dirname "$0")"
+
+if [ -f ".env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . ./.env
+  set +a
+fi
+
 : "${MLX_MODEL:=models/Qwen2.5-Coder-7B-Instruct-4bit}"
 : "${MLX_PORT:=8080}"
 : "${GATEWAY_PORT:=3001}"
@@ -13,8 +22,6 @@ set -euo pipefail
 : "${WEB_USE_JINA_READER:=1}"
 : "${WEB_BLOCKED_DOMAINS:=reddit.com,quora.com}"
 : "${AUTO_WEB_TIMEOUT:=8}"
-
-cd "$(dirname "$0")"
 
 if [ ! -x ".venv/bin/python" ]; then
   echo "Missing .venv. Create it with:" >&2

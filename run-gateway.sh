@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+cd "$(dirname "$0")"
+
+if [ -f ".env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . ./.env
+  set +a
+fi
+
 : "${MLX_BASE_URL:=http://127.0.0.1:8080}"
 : "${MLX_MODEL:=models/Qwen2.5-Coder-7B-Instruct-4bit}"
 : "${GATEWAY_PORT:=3001}"
@@ -14,8 +23,6 @@ set -euo pipefail
 
 export WEB_POLICY SEARCH_DEPTH WEB_CONTEXT_SIZE WEB_MAX_USES WEB_USE_JINA_READER
 export WEB_BLOCKED_DOMAINS AUTO_WEB_TIMEOUT
-
-cd "$(dirname "$0")"
 
 PYTHON="${PYTHON:-python3}"
 if [ -x ".venv/bin/python" ]; then

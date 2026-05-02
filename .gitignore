@@ -15,6 +15,7 @@ ENV/
 .env
 .env.*
 .envrc
+!.env.example
 
 # Logs and local output
 *.log
