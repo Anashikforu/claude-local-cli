@@ -213,6 +213,10 @@ def auto_web_tool_budget() -> int:
     return max(0, int(os.getenv("WEB_MAX_USES", os.getenv("AUTO_WEB_TOOL_BUDGET", "2"))))
 
 
+def model_web_tool_loop_enabled() -> bool:
+    return os.getenv("ENABLE_MODEL_WEB_TOOL_LOOP", "0").lower() in ("1", "true", "yes")
+
+
 def auto_web_mode() -> str:
     mode = os.getenv("SEARCH_DEPTH", os.getenv("AUTO_WEB_MODE", "balanced")).lower()
     aliases = {"quick": "fast", "agentic": "balanced"}
@@ -958,7 +962,7 @@ def anthropic_to_openai_request(request: dict[str, Any], default_model: str) -> 
             {"role": "system", "content": accuracy_policy_prompt()},
         )
 
-    if use_web_this_turn:
+    if use_web_this_turn and model_web_tool_loop_enabled():
         openai_request["messages"].insert(
             0,
             {
@@ -1002,7 +1006,7 @@ def anthropic_to_openai_request(request: dict[str, Any], default_model: str) -> 
                     "function": {"name": tool_choice.get("name", "")},
                 }
 
-    if use_web_this_turn:
+    if use_web_this_turn and model_web_tool_loop_enabled():
         add_local_web_tools(openai_request)
     return openai_request
 
@@ -1222,6 +1226,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             "search_depth": auto_web_mode(),
             "web_context_size": web_context_size(),
             "web_max_uses": auto_web_tool_budget(),
+            "model_web_tool_loop": model_web_tool_loop_enabled(),
             "input": {
                 "chars": len(latest_text),
                 "estimated_tokens": estimate_tokens(latest_text),
@@ -1275,6 +1280,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
         request_for_loop = dict(openai_request)
         request_for_loop["messages"] = list(openai_request.get("messages", []))
         request_for_loop["stream"] = False
+
+        if not model_web_tool_loop_enabled():
+            return self.openai_chat_completion(request_for_loop)
 
         tool_budget = auto_web_tool_budget()
         for _ in range(3):

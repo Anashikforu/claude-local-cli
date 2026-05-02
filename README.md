@@ -59,6 +59,7 @@ WEB_POLICY=auto \
 SEARCH_DEPTH=agentic \
 WEB_CONTEXT_SIZE=medium \
 WEB_MAX_USES=2 \
+ENABLE_MODEL_WEB_TOOL_LOOP=0 \
 WEB_MAX_TOOL_RESULT_CHARS=6000 \
 AUTO_WEB_MAX_CHARS=1500 \
 WEB_BLOCKED_DOMAINS=reddit.com,quora.com \
@@ -114,6 +115,7 @@ The gateway follows a Codex/Claude-style strategy:
 - External, current, source-specific, docs, package, URL, and identity questions trigger web verification.
 - User overrides are respected: saying "search", "verify", "latest", or "docs" forces web use; saying "don't search" or "without web" disables it for that request.
 - Tool use is budgeted per turn with `WEB_MAX_USES`.
+- Model-initiated follow-up web tool loops are disabled by default with `ENABLE_MODEL_WEB_TOOL_LOOP=0`; automatic evidence is still injected before the answer. Enable the loop only when you accept slower multi-step web reasoning.
 - Domain controls mirror Claude/OpenAI-style filters with `WEB_ALLOWED_DOMAINS` and `WEB_BLOCKED_DOMAINS`.
 - Page extraction uses Jina Reader when `WEB_USE_JINA_READER=1`.
 - Web evidence is capped by default. Keep `TAVILY_INCLUDE_RAW_CONTENT=0` unless you explicitly want large Tavily page content.

@@ -18,7 +18,7 @@ class GatewayPolicyTests(unittest.TestCase):
         self.assertFalse(converted["_web_enabled_this_turn"])
         self.assertNotIn("tools", converted)
 
-    def test_docs_turn_attaches_web_tools(self):
+    def test_docs_turn_enables_web_without_tool_loop_by_default(self):
         request = {
             "model": "qwen-coder",
             "messages": [{"role": "user", "content": "check latest mlx-lm docs"}],
@@ -27,10 +27,22 @@ class GatewayPolicyTests(unittest.TestCase):
         converted = gateway.anthropic_to_openai_request(request, "models/qwen")
 
         self.assertTrue(converted["_web_enabled_this_turn"])
-        self.assertEqual(
-            ["web_search", "web_fetch"],
-            [tool["function"]["name"] for tool in converted["tools"]],
-        )
+        self.assertNotIn("tools", converted)
+
+    def test_docs_turn_attaches_web_tools_when_loop_enabled(self):
+        request = {
+            "model": "qwen-coder",
+            "messages": [{"role": "user", "content": "check latest mlx-lm docs"}],
+        }
+
+        with patch.dict(os.environ, {"ENABLE_MODEL_WEB_TOOL_LOOP": "1"}):
+            converted = gateway.anthropic_to_openai_request(request, "models/qwen")
+
+            self.assertTrue(converted["_web_enabled_this_turn"])
+            self.assertEqual(
+                ["web_search", "web_fetch"],
+                [tool["function"]["name"] for tool in converted["tools"]],
+            )
 
     def test_user_can_disable_web_for_turn(self):
         request = {
